@@ -438,7 +438,7 @@ thead th.sortable:hover{background:#DDEFE6}
 </details>
 
 <details class="filesbox" id="ordbox">
-  <summary>ผลตรวจ Planning Orders <span class="cnt" id="cOrd">0/0</span><span class="hint" style="margin-left:8px">— Onboard ID + Orbit Download + INVP Start/End (XML) เทียบกับ ON_BOARD_ID + Orbit Download + Start/END (ตาราง)</span></summary>
+  <summary>ผลตรวจ Planning Orders <span class="cnt" id="cOrd">0/0</span><span class="hint" style="margin-left:8px">— จับคู่เมื่อ Onboard ID + INVP Start + INVP End + Acq Start + Request Name (XML) ตรงกับชุดข้อมูลในตารางทั้ง 5 ค่า</span></summary>
   <div id="ordList" style="padding:8px 12px;font-size:12px"></div>
 </details>
 
@@ -2650,11 +2650,44 @@ function activeEmps(){
   return MERGED.empList.filter(e=>!ok||ok.has(planDate(MERGED.owner[e].plan)))
     .map(e=>({emp:e,plan:MERGED.owner[e].plan,data:MERGED.owner[e].data}));
 }
+/* ============ ชุดข้อมูลเดียวกัน (Dataset key) ============
+   Cloud Cover / Incidence Angle / Area เก็บและแสดงตาม "ชุดข้อมูล" ซึ่งต้องตรงกันทั้ง 5 ค่า:
+   ON_BOARD_ID + INVP Start + INVP End + ACQ Start + Request Name
+   (เดิมใช้ ON_BOARD_ID อย่างเดียว ทำให้ ID ที่ซ้ำกันได้ค่าของชุดอื่นไปแสดงทั้งที่ยังไม่ได้นำเข้า XML ของชุดนั้น) */
+const T19=s=>{const m=String(s||"").match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})/);return m?m[1]+"T"+m[2]:"";};
+const tSec=s=>{const x=T19(s);return x?Date.parse(x+"Z")/1000:NaN;};
+const nearT=(a,b)=>{const x=tSec(a),y=tSec(b);return isFinite(x)&&isFinite(y)&&Math.abs(x-y)<=1;};   /* เวลาต่างกันไม่เกิน 1 วินาที (เศษวินาทีใน XML) ถือว่าตรงกัน */
+const reqN=s=>stripNSDC(String(s||"").split("//")[0].trim()).replace(/_NSDC_[A-Za-z0-9]+$/i,"").trim().toLowerCase();
+function hash36(s){let a=0x811c9dc5,b=0x9e3779b9;
+  for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);a^=c;a=Math.imul(a,16777619);b=Math.imul(b^c,0x85ebca6b);b^=b>>>13;}
+  return (a>>>0).toString(36)+(b>>>0).toString(36);}
+const dsKey=(id,req,s,e,a)=>id?id+"-"+hash36([reqN(req),T19(s),T19(e),T19(a)].join("|")):"";
+let KIX={acq:{},dl:{}};
+function buildKeyIndex(){
+  const acq={},dl={};
+  PLANS.forEach(pl=>Object.values(pl.emps).forEach(d=>{
+    d.acq.forEach(r=>{(acq[r.id+"|"+reqN(r.req)]=acq[r.id+"|"+reqN(r.req)]||[]).push({st:pl.stamp,b:r.b});});
+    d.passes.forEach(ps=>ps.rows.forEach(r=>{(dl[r.id+"|"+reqN(r.req)]=dl[r.id+"|"+reqN(r.req)]||[]).push({st:pl.stamp,s:ps.start,e:ps.end,orbit:ps.orbit});}));
+  }));
+  KIX={acq,dl};
+}
+function pickByStamp(arr,st,before){
+  if(!arr||!arr.length)return null;
+  const s=[...arr].sort((x,y)=>(x.st||"").localeCompare(y.st||""));
+  if(before){const c=s.filter(x=>(x.st||"")<=st);return c.length?c[c.length-1]:s[0];}
+  const c=s.filter(x=>(x.st||"")>=st);return c.length?c[0]:s[s.length-1];}
+const pickAcq=(id,req,st)=>pickByStamp(KIX.acq[id+"|"+reqN(req)],st,true);
+const pickDl=(id,req,st)=>pickByStamp(KIX.dl[id+"|"+reqN(req)],st,false);
+/* แถว Downlink: INVP Start/End = เวลา pass · ACQ Start = ACQ_BEGIN ของ ID + Request Name เดียวกัน */
+const dwlDk=(r,ps,pl)=>{const a=pickAcq(r.id,r.req,pl.stamp);return dsKey(r.id,r.req,ps.start,ps.end,a?a.b:"");};
+/* แถว Acquisition: ACQ Start = ACQ_BEGIN ของแถวเอง · INVP Start/End = pass ที่ดาวน์โหลดแถวนี้ (ถ้ายังไม่ดาวน์โหลดจะว่าง) */
+const acqDk=(r,pl,d)=>{const x=d||pickDl(r.id,r.req,pl.stamp);return dsKey(r.id,r.req,x?x.s:"",x?x.e:"",r.b);};
+
 function buildRows(){
   const dwl=[],acq=[],dwlNone=[],acqNone=[],dlIndex={};
   const list=activeEmps();
   list.forEach(({emp,plan,data})=>data.passes.forEach(ps=>ps.rows.forEach(r=>{
-    if(!dlIndex[r.id])dlIndex[r.id]={orbit:ps.orbit,emp};})));
+    if(!dlIndex[r.id])dlIndex[r.id]={orbit:ps.orbit,emp,s:ps.start,e:ps.end,req:r.req};})));
   list.forEach(({emp,plan,data})=>{
     const h=MERGED.history[emp]||[];
     const status=h.length>1&&h[h.length-1].planId===plan.planId?"แทนที่แล้ว":(h.length>1?"เวอร์ชันเก่า":"ครั้งแรก");
@@ -2667,11 +2700,11 @@ function buildRows(){
     [...data.passes].sort((a,b)=>(a.start||"").localeCompare(b.start||"")).forEach(ps=>{
       [...ps.rows].sort((a,b)=>(+a.id)-(+b.id)).forEach(r=>{
         dwl.push({plan:plan.planId,pkey:plan.key,orbit:plan.orbit,emp,status,pStart:ps.start,pEnd:ps.end,pQty:ps.qty,
-          pOrbit:ps.orbit,id:r.id,req:r.req,b:r.b,e:r.e,acqQty});});});
+          pOrbit:ps.orbit,id:r.id,req:r.req,b:r.b,e:r.e,acqQty,dk:dwlDk(r,ps,plan)});});});
     [...data.acq].sort((a,b)=>(+a.id)-(+b.id)).forEach(r=>{
       const d=dlIndex[r.id];
       acq.push({plan:plan.planId,pkey:plan.key,orbit:plan.orbit,emp,status,acqQty,id:r.id,req:r.req,b:r.b,e:r.e,
-        dwlOrbit:d?d.orbit:"",pOrbit:d?d.orbit:""});});
+        dwlOrbit:d?d.orbit:"",pOrbit:d?d.orbit:"",dk:acqDk(r,plan,(d&&reqN(d.req)===reqN(r.req))?d:null)});});
   });
   return{dwl,acq,dwlNone,acqNone};
 }
@@ -2696,14 +2729,17 @@ function saveMeta(){
   catch(err){console.error("บันทึกสถานะไม่สำเร็จ",err);}
 }
 function setMeta(kind,id,val){
+  if(!id)return;
   if(val===null||val===undefined||val==="")delete META[kind][id]; else META[kind][id]=val;
   saveMeta();
 }
 /* auto: Production as soon as a Data Strip is filled in; otherwise Waiting -> OK */
 const hasDstrip=r=>String(META.dstrip[r.id]??"").trim()!=="";
-const cufAuto=r=>hasDstrip(r)?"Production":(META.cloud[r.id]!==undefined&&META.inc[r.id]!==undefined)?"OK":"Waiting";
+const cufAuto=r=>hasDstrip(r)?"Production":(META.cloud[r.dk||""]!==undefined&&META.inc[r.dk||""]!==undefined)?"OK":"Waiting";
 const cufOf=r=>(META.cuf[r.id]==="Failed"||META.cuf[r.id]==="Production")?META.cuf[r.id]:cufAuto(r);
-const metaVal=(kind,r)=>META[kind][r.id]??"";
+/* cloud / inc / area = ตามชุดข้อมูล (r.dk) · remark / dstrip / cuf = ตาม ON_BOARD_ID เหมือนเดิม */
+const NUMK={cloud:1,inc:1,area:1};
+const metaVal=(kind,r)=>(NUMK[kind]?META[kind][r.dk||""]:META[kind][r.id])??"";
 /* Status MP: Executing (default when a plan is imported) -> Completed when every
    datastrip of the plan has Status CUF = OK or Production; Expired is chosen manually. */
 function mpAuto(pkey){
@@ -2712,24 +2748,24 @@ function mpAuto(pkey){
   if(pl){
     let emps=Object.keys(pl.emps).filter(e=>MERGED.owner[e]&&MERGED.owner[e].plan===pl);
     if(!emps.length)emps=Object.keys(pl.emps);
-    const ids=new Set();
+    const items=new Map();
     emps.forEach(e=>{const d=pl.emps[e];
-      d.passes.forEach(ps=>ps.rows.forEach(r=>ids.add(r.id)));
-      d.acq.forEach(r=>ids.add(r.id));});
-    if(ids.size&&[...ids].every(id=>{const c=cufOf({id});return c==="OK"||c==="Production";}))res="Completed";
+      d.passes.forEach(ps=>ps.rows.forEach(r=>items.set(r.id,{id:r.id,dk:dwlDk(r,ps,pl)})));
+      d.acq.forEach(r=>{if(!items.has(r.id))items.set(r.id,{id:r.id,dk:acqDk(r,pl)});});});
+    if(items.size&&[...items.values()].every(x=>{const c=cufOf(x);return c==="OK"||c==="Production";}))res="Completed";
   }
   return MPC[pkey]=res;
 }
 const mpStatus=pkey=>META.mp[pkey]==="Expired"?"Expired":mpAuto(pkey);
 const cufSel=r=>{const v=cufOf(r),auto=cufAuto(r);
-  return `<select class="st ${v.toLowerCase()}" data-cuf="${esc(r.id)}" aria-label="Status CUF">`+
+  return `<select class="st ${v.toLowerCase()}" data-cuf="${esc(r.id)}" data-dk="${esc(r.dk||"")}" aria-label="Status CUF">`+
     `<option value="auto"${(v!=="Failed"&&!(v==="Production"&&auto!=="Production"))?" selected":""}>${auto}</option>`+
     (auto!=="Production"?`<option value="Production"${v==="Production"?" selected":""}>Production</option>`:"")+
     `<option value="Failed"${v==="Failed"?" selected":""}>Failed</option></select>`;};
 /* update Status CUF / Status MP dropdowns in place (keeps focus in the number box being typed) */
 function refreshStatusCells(){
   MPC={};
-  document.querySelectorAll("#tbody select[data-cuf]").forEach(s=>{s.outerHTML=cufSel({id:s.dataset.cuf});});
+  document.querySelectorAll("#tbody select[data-cuf]").forEach(s=>{s.outerHTML=cufSel({id:s.dataset.cuf,dk:s.dataset.dk});});
   document.querySelectorAll("#tbody select[data-mp]").forEach(s=>{s.outerHTML=mpSel(s.dataset.mp);});
 }
 const mpSel=pkey=>{const st=mpStatus(pkey),auto=mpAuto(pkey);
@@ -2743,14 +2779,14 @@ const remarkIn=r=>`<textarea class="rmk-in" rows="1" spellcheck="false" data-rem
 const dstripIn=r=>`<input class="ds-in" type="text" spellcheck="false" autocomplete="off" data-dstrip data-id="${esc(r.id)}" value="${esc(metaVal("dstrip",r))}" placeholder="—" aria-label="Data Strip">`;
 function autosizeRemarks(){document.querySelectorAll("#tbody textarea.rmk-in").forEach(a=>{a.style.height="auto";a.style.height=a.scrollHeight+"px";});}
 const numIn=(kind,r)=>kind==="area"
-  ?`<input class="num-in" type="text" inputmode="decimal" autocomplete="off" data-num="area" data-id="${esc(r.id)}" value="${esc(fmtArea(metaVal("area",r)))}" placeholder="—" aria-label="Area (km2)">`
-  :`<input class="num-in" type="number" step="any" ${kind==="cloud"?'min="0" max="100" ':""}data-num="${kind}" data-id="${esc(r.id)}" value="${esc(metaVal(kind,r))}" placeholder="—" aria-label="${kind==="cloud"?"Cloud Cover (%)":"Incidence Angle"}">`;
+  ?`<input class="num-in" type="text" inputmode="decimal" autocomplete="off" data-num="area" data-id="${esc(r.dk||"")}" value="${esc(fmtArea(metaVal("area",r)))}" placeholder="—" aria-label="Area (km2)">`
+  :`<input class="num-in" type="number" step="any" ${kind==="cloud"?'min="0" max="100" ':""}data-num="${kind}" data-id="${esc(r.dk||"")}" value="${esc(metaVal(kind,r))}" placeholder="—" aria-label="${kind==="cloud"?"Cloud Cover (%)":"Incidence Angle"}">`;
 function renderCloudMeters(){
   /* fixed bands are (low, high] ; the first band includes 0 */
   const bands=[["0 – 10 %",-1,10],["&gt; 10 – 20 %",10,20],["&gt; 20 – 30 %",20,30],
                ["&gt; 30 – 40 %",30,40],["&gt; 40 – 50 %",40,50],["อื่น ๆ (&gt; 50 %)",50,Infinity]];
   const cnt=bands.map(()=>0);let filled=0;const n=ROWS.dwl.length;
-  ROWS.dwl.forEach(r=>{const v=parseFloat(META.cloud[r.id]);
+  ROWS.dwl.forEach(r=>{const v=parseFloat(META.cloud[r.dk]);
     if(!isFinite(v))return;
     filled++;
     for(let i=0;i<bands.length;i++){if(v>bands[i][1]&&v<=bands[i][2]){cnt[i]++;break;}}});
@@ -2765,7 +2801,7 @@ function renderCloudCustom(){
   const hasF=isFinite(f),hasT=isFinite(t),out=$("#ccCount");
   if(!hasF&&!hasT){out.innerHTML="—";return;}
   let c=0;
-  ROWS.dwl.forEach(r=>{const v=parseFloat(META.cloud[r.id]);
+  ROWS.dwl.forEach(r=>{const v=parseFloat(META.cloud[r.dk]);
     if(!isFinite(v))return;
     if(hasF&&v<f)return;
     if(hasT&&v>t)return;
@@ -2813,19 +2849,19 @@ function acqLookup(id){let hit=null;
 function prodRows(){
   const out=[],seen=new Set();
   ROWS.acq.forEach(r=>{if(cufOf(r)!=="Production")return;seen.add(r.id);
-    out.push({pdate:planDateFmt(r.pkey),pOrbit:r.dwlOrbit||"",id:r.id,req:r.req,b:r.b,e:r.e,emp:r.emp});});
+    out.push({pdate:planDateFmt(r.pkey),pOrbit:r.dwlOrbit||"",id:r.id,req:r.req,b:r.b,e:r.e,emp:r.emp,dk:r.dk});});
   ROWS.dwl.forEach(r=>{if(cufOf(r)!=="Production"||seen.has(r.id))return;seen.add(r.id);
     const h=acqLookup(r.id);
-    out.push({pdate:planDateFmt(r.pkey),pOrbit:r.pOrbit||"",id:r.id,req:(h&&h.r.req)||r.req,b:h?h.r.b:"",e:h?h.r.e:"",emp:r.emp});});
+    out.push({pdate:planDateFmt(r.pkey),pOrbit:r.pOrbit||"",id:r.id,req:(h&&h.r.req)||r.req,b:h?h.r.b:"",e:h?h.r.e:"",emp:r.emp,dk:r.dk});});
   return out.sort((a,b)=>(a.pdate||"").localeCompare(b.pdate||"")||(+a.id)-(+b.id));
 }
 function waitRows(){
   const out=[],seen=new Set();
   ROWS.acq.forEach(r=>{if(cufOf(r)!=="Waiting")return;seen.add(r.id);
-    out.push({pdate:planDateFmt(r.pkey),pOrbit:r.dwlOrbit||"",id:r.id,req:r.req,b:r.b,e:r.e,emp:r.emp});});
+    out.push({pdate:planDateFmt(r.pkey),pOrbit:r.dwlOrbit||"",id:r.id,req:r.req,b:r.b,e:r.e,emp:r.emp,dk:r.dk});});
   ROWS.dwl.forEach(r=>{if(cufOf(r)!=="Waiting"||seen.has(r.id))return;seen.add(r.id);
     const h=acqLookup(r.id);
-    out.push({pdate:planDateFmt(r.pkey),pOrbit:r.pOrbit||"",id:r.id,req:(h&&h.r.req)||r.req,b:h?h.r.b:"",e:h?h.r.e:"",emp:r.emp});});
+    out.push({pdate:planDateFmt(r.pkey),pOrbit:r.pOrbit||"",id:r.id,req:(h&&h.r.req)||r.req,b:h?h.r.b:"",e:h?h.r.e:"",emp:r.emp,dk:r.dk});});
   return out.sort((a,b)=>(a.pdate||"").localeCompare(b.pdate||"")||(+a.id)-(+b.id));
 }
 function nodlRows(){
@@ -3001,7 +3037,7 @@ function renderAreaMeters(){
   const order={},sum={},filled={},total={};let all=0,allFilled=0;
   ROWS.dwl.forEach(r=>{const c=reqCategory(r.req);
     if(c){order[c]=(order[c]||0)+1;total[c]=(total[c]||0)+1;}
-    const v=parseFloat(META.area[r.id]);
+    const v=parseFloat(META.area[r.dk]);
     if(!isFinite(v))return;
     all+=v;allFilled++;
     if(c){sum[c]=(sum[c]||0)+v;filled[c]=(filled[c]||0)+1;}});
@@ -3150,15 +3186,16 @@ function render(){
 
 /* ============ Planning Orders (SpreadsheetML .xml) -> Area / Cloud Cover / Incidence Angle ============
    นำเข้าด้วยปุ่ม "เพิ่มไฟล์ XML" เดียวกับไฟล์ INVP (เลือกพร้อมกันหรือแยกครั้งก็ได้)
-   กรอกให้เฉพาะแถวที่ Onboard ID = ON_BOARD_ID และ INVP Start = Start และ INVP End = END ตรงกันทั้งสามค่า
+   กรอกให้เฉพาะ "ชุดข้อมูลเดียวกัน" คือ Onboard ID + INVP Start + INVP End + Acq Start + Request Name ตรงกันทั้ง 5 ค่า
+   (เวลาต่างกันไม่เกิน 1 วินาทีถือว่าตรง · ค่าถูกเก็บตามชุดข้อมูล ไม่ใช่ตาม ON_BOARD_ID อย่างเดียว)
    - ยังไม่มี ON_BOARD_ID นี้ในตาราง -> รอ (เก็บไว้ในเครื่อง กรอกให้เองเมื่อนำเข้าไฟล์ INVP ภายหลัง)
    - ON_BOARD_ID ตรงแต่ Start/END ไม่ตรง -> ไม่กรอก แสดงในกล่อง "ผลตรวจ Planning Orders"
    - Area: ใช้ค่าจาก XML ใหม่ทับค่าเดิมเสมอ · Cloud Cover / Incidence Angle: ช่องที่มีค่าอยู่แล้วและต่างจาก XML -> ไม่ทับ (มีปุ่มทับด้วยค่าจาก XML)
    Area เก็บเป็นทศนิยม 2 ตำแหน่ง */
-const ORD_KEY="theos2_orders_v1", ORD_DONE_KEY="theos2_orders_done_v1";
+const ORD_KEY="theos2_orders_v2", ORD_DONE_KEY="theos2_orders_done_v2";   /* v2: ต้องมี Acq Start + Request Name — นำเข้าไฟล์ Planning Orders ใหม่ */
 let LAST_ORD=null;
 const isOrderXml=t=>/<Workbook[\s>]/.test(t)&&!/<MISSION_PLAN_ID>/.test(t)&&(/Onboard ID/i.test(t)||/ss:Name="Planning Orders"/i.test(t)||/<Data[^>]*>\s*MPLN_/.test(t));
-const ordKey=o=>o.orbit?o.id+"|"+o.orbit+"|"+o.start+"|"+o.end:o.id+"|"+o.start+"|"+o.end;
+const ordKey=o=>[o.id,T19(o.start),T19(o.end),T19(o.as),reqN(o.rq)].join("|");
 const ordLoad=()=>{try{const a=JSON.parse(localStorage.getItem(ORD_KEY)||"[]");return Array.isArray(a)?a:[];}catch(e){return [];}};
 const ordDone=()=>{try{return JSON.parse(localStorage.getItem(ORD_DONE_KEY)||"{}")||{};}catch(e){return {};}};
 const cleanNum=v=>{const x=parseFloat(v);return isFinite(x)?String(+x.toPrecision(15)):"";};
@@ -3181,14 +3218,15 @@ function parseOrders(xml,fileName){
   const c=hasHeader?{id:col(s=>s==="onboard id"),st:col(s=>s==="invp start"),en:col(s=>s==="invp end"),
       orb:col(s=>s==="orbit number"||s==="orbit"),
       ar:col(s=>s.startsWith("area")),cl:col(s=>s.startsWith("cloud")),inc:col(s=>s.startsWith("incident")||s.startsWith("incidence")),
+      as:col(s=>s==="acq start"),rq:col(s=>s==="request name"),
       mp:col(s=>s==="mission plan id")}
-    :{id:3,st:4,en:5,orb:8,ar:9,cl:14,inc:15,mp:0};
-  if([c.id,c.st,c.en,c.orb].some(i=>i<0))throw new Error("ไฟล์ "+fileName+" ไม่มีคอลัมน์ Onboard ID / INVP Start / INVP End / Orbit Number");
+    :{id:3,st:4,en:5,orb:8,ar:9,cl:14,inc:15,mp:0,as:6,rq:1};
+  if([c.id,c.st,c.en,c.as,c.rq].some(i=>i<0))throw new Error("ไฟล์ "+fileName+" ไม่มีคอลัมน์ Onboard ID / INVP Start / INVP End / Acq Start / Request Name");
   const out=[];
   grid.slice(hasHeader?1:0).forEach(r=>{
     const id=(r[c.id]||"").trim();if(!/^\d+$/.test(id))return;
     const area=parseFloat(r[c.ar]),cloud=parseFloat(r[c.cl]),inc=parseFloat(r[c.inc]);
-    out.push({id,orbit:String(parseInt(r[c.orb],10)||"").trim(),start:(r[c.st]||"").trim(),end:(r[c.en]||"").trim(),plan:c.mp>=0?(r[c.mp]||"").trim():"",src:fileName,
+    out.push({id,orbit:c.orb>=0?String(parseInt(r[c.orb],10)||"").trim():"",start:(r[c.st]||"").trim(),end:(r[c.en]||"").trim(),as:(r[c.as]||"").trim(),rq:(r[c.rq]||"").trim(),plan:c.mp>=0?(r[c.mp]||"").trim():"",src:fileName,
       area:isFinite(area)?area.toFixed(2):"",
       cloud:isFinite(cloud)?String(Math.min(100,Math.max(0,cloud))):"",
       inc:cleanNum(r[c.inc])});});
@@ -3204,40 +3242,62 @@ function importOrders(xml,fileName){
   try{localStorage.setItem(ORD_DONE_KEY,JSON.stringify(dn));}catch(e){}
   return fileName+" ("+rows.length+" แถว)";
 }
+/* แถว Downlink ของทุกแผนที่นำเข้า (รวมแผนที่ EMP ถูกแทนที่แล้ว) พร้อมค่า 5 อย่างของชุดข้อมูล */
+function orderCands(){
+  const out=[];
+  PLANS.forEach(pl=>Object.keys(pl.emps).forEach(e=>pl.emps[e].passes.forEach(ps=>ps.rows.forEach(r=>{
+    const a=pickAcq(r.id,r.req,pl.stamp);
+    out.push({id:r.id,req:r.req,s:ps.start,e:ps.end,a:a?a.b:"",dk:dwlDk(r,ps,pl)});}))));
+  return out;
+}
 function applyOrders(force){
+  buildKeyIndex();
   const list=ordLoad(),rep={items:[],filled:0,newFilled:0,pending:0,mismatch:0,conflict:0,total:list.length};
   LAST_ORD=rep;
   if(!list.length){renderOrdBox(rep);return rep;}
   const dn=ordDone(),byId={},planKeys=new Set(PLANS.map(p=>p.key));
-  /* ค้นจากทุกแผนที่นำเข้า (รวมแผนที่ EMP ถูกแทนที่แล้ว) */
-  PLANS.forEach(pl=>Object.keys(pl.emps).forEach(e=>pl.emps[e].passes.forEach(ps=>ps.rows.forEach(r=>{
-    (byId[r.id]=byId[r.id]||[]).push({orbit:String(parseInt(ps.orbit,10)||""),start:ps.start,end:ps.end});}))));
+  orderCands().forEach(c=>{(byId[c.id]=byId[c.id]||[]).push(c);});
   let changed=false;
   list.forEach(o=>{
     const key=ordKey(o),it={o,status:""};rep.items.push(it);
-    const cur=k=>META[k][o.id];
+    const prev=Array.isArray(dn[key])?dn[key]:[];
     const cand=byId[o.id];
     if(!cand){
-      if(dn[key]&&(cur("area")!==undefined||cur("cloud")!==undefined||cur("inc")!==undefined)){it.status="ok";rep.filled++;return;}
+      if(prev.some(k=>META.area[k]!==undefined||META.cloud[k]!==undefined||META.inc[k]!==undefined)){it.status="ok";rep.filled++;return;}
       it.status="pending";
       const pk=(o.plan||"").split("_").slice(1,4).join("_");
       it.note=pk&&!planKeys.has(pk)?"ยังไม่ได้นำเข้าไฟล์ INVP ของ "+o.plan:"ไม่พบ ON_BOARD_ID นี้ในตาราง";rep.pending++;return;}
-    const okOrb=c=>!o.orbit||c.orbit===o.orbit;
-    if(!cand.some(c=>okOrb(c)&&c.start===o.start&&c.end===o.end)){it.status="mismatch";
-      const why=!cand.some(c=>c.start===o.start&&c.end===o.end)?"INVP Start/End ไม่ตรง":"Orbit Download ไม่ตรง";
-      it.note=why+" · ตาราง: "+cand.map(c=>"Orbit "+(c.orbit||"-")+" "+fmt(c.start)+" → "+fmt(c.end)).join(" | ");rep.mismatch++;return;}
-    /* Area: ถ้ามี XML ใหม่ ใช้ค่าจาก XML ทับค่าเดิมเสมอ (ทำครั้งเดียวต่อการนำเข้า จึงไม่ทับค่าที่แก้ด้วยมือภายหลัง) */
-    const fresh=!dn[key];
-    if(fresh&&o.area!==""&&META.area[o.id]!==o.area){META.area[o.id]=o.area;changed=true;}
-    /* Cloud Cover / Incidence Angle: กรอกเมื่อว่าง · ถ้ามีค่าเดิมที่ต่างจาก XML ไม่ทับ (ยกเว้นกดปุ่มทับ) */
-    const diff=[];
-    ["cloud","inc"].forEach(k=>{
-      if(o[k]==="")return;
-      if(cur(k)===undefined||force){if(cur(k)!==o[k]){META[k][o.id]=o[k];changed=true;}}
-      else if(parseFloat(cur(k))!==parseFloat(o[k]))diff.push(k);});
+    /* ชุดข้อมูลเดียวกัน = ON_BOARD_ID + Request Name + INVP Start + INVP End + Acq Start ตรงกันทั้งหมด */
+    const same=cand.filter(c=>reqN(c.req)===reqN(o.rq));
+    const hit=same.filter(c=>nearT(c.s,o.start)&&nearT(c.e,o.end)&&nearT(c.a,o.as));
+    if(!hit.length){
+      if(same.length&&same.every(c=>!c.a)){it.status="pending";
+        it.note="ยังไม่พบ Acquisition (ACQ_BEGIN) ของ ID + Request Name นี้ในไฟล์ INVP ที่นำเข้า";rep.pending++;return;}
+      const diffOf=c=>{const b=[];
+        if(reqN(c.req)!==reqN(o.rq))b.push("Request Name");
+        if(!nearT(c.s,o.start))b.push("INVP Start");
+        if(!nearT(c.e,o.end))b.push("INVP End");
+        if(!nearT(c.a,o.as))b.push("Acq Start");return b;};
+      const best=cand.map(c=>({c,b:diffOf(c)})).sort((x,y)=>x.b.length-y.b.length)[0];
+      it.status="mismatch";
+      it.note=best.b.join(" / ")+" ไม่ตรง · ตาราง: "+fmt(best.c.s)+" → "+fmt(best.c.e)+" · ACQ "+(fmt(best.c.a)||"-")+" · "+best.c.req;
+      rep.mismatch++;return;}
+    const dks=[...new Set(hit.map(c=>c.dk))];
+    const done=prev.slice();
+    let fresh=false;const diff=[];
+    dks.forEach(dk=>{
+      /* Area: ถ้ามี XML ใหม่ ใช้ค่าจาก XML ทับค่าเดิม (ทำครั้งเดียวต่อชุดข้อมูลต่อการนำเข้า จึงไม่ทับค่าที่แก้ด้วยมือภายหลัง) */
+      if(!done.includes(dk)){fresh=true;done.push(dk);
+        if(o.area!==""&&META.area[dk]!==o.area){META.area[dk]=o.area;changed=true;}}
+      /* Cloud Cover / Incidence Angle: กรอกเมื่อว่าง · ถ้ามีค่าเดิมที่ต่างจาก XML ไม่ทับ (ยกเว้นกดปุ่มทับ) */
+      ["cloud","inc"].forEach(k=>{
+        if(o[k]==="")return;
+        const cur=META[k][dk];
+        if(cur===undefined||force){if(cur!==o[k]){META[k][dk]=o[k];changed=true;}}
+        else if(parseFloat(cur)!==parseFloat(o[k]))diff.push(k+"="+cur+" (XML "+o[k]+")");});});
     if(fresh)rep.newFilled++;
-    dn[key]=1;
-    if(diff.length){it.status="conflict";it.note="ค่าเดิมในตาราง: "+diff.map(k=>k+"="+cur(k)+" (XML "+o[k]+")").join(", ")+" · Area ใช้ค่าจาก XML แล้ว";rep.conflict++;return;}
+    dn[key]=done;
+    if(diff.length){it.status="conflict";it.note="ค่าเดิมในตาราง: "+diff.join(", ")+" · Area ใช้ค่าจาก XML แล้ว";rep.conflict++;return;}
     it.status="ok";rep.filled++;
   });
   if(changed)saveMeta();
@@ -3245,19 +3305,19 @@ function applyOrders(force){
   renderOrdBox(rep);
   return rep;
 }
-const orderSummary=r=>"กรอก "+r.newFilled+" แถว (ตรงแล้วรวม "+r.filled+"/"+r.total+") · รอไฟล์ INVP "+r.pending+" · ไม่ตรง (Orbit/เวลา) "+r.mismatch+" · ค่าชนกัน "+r.conflict;
+const orderSummary=r=>"กรอก "+r.newFilled+" แถว (ตรงแล้วรวม "+r.filled+"/"+r.total+") · รอไฟล์ INVP "+r.pending+" · ไม่ตรง (5 ค่า) "+r.mismatch+" · ค่าชนกัน "+r.conflict;
 function renderOrdBox(rep){
   const box=document.getElementById("ordbox"),el=document.getElementById("ordList");if(!box||!el)return;
   document.getElementById("cOrd").textContent=rep.filled+"/"+rep.total;
-  const bad=rep.items.filter(i=>i.status!=="ok"),lab={pending:"รอ INVP",mismatch:"ไม่ตรง (Orbit/เวลา)",conflict:"ค่าชนกัน"};
+  const bad=rep.items.filter(i=>i.status!=="ok"),lab={pending:"รอ INVP",mismatch:"ไม่ตรง (5 ค่า)",conflict:"ค่าชนกัน"};
   el.innerHTML=!rep.total?'<div class="hint">ยังไม่ได้นำเข้าไฟล์ Planning Orders</div>':
-    '<div style="margin:2px 0 8px">กรอกแล้ว <b>'+rep.filled+'</b> / '+rep.total+' · รอ INVP <b>'+rep.pending+'</b> · ไม่ตรง (Orbit/เวลา) <b>'+rep.mismatch+'</b> · ค่าชนกัน <b>'+rep.conflict+'</b>'+
+    '<div style="margin:2px 0 8px">กรอกแล้ว <b>'+rep.filled+'</b> / '+rep.total+' · รอ INVP <b>'+rep.pending+'</b> · ไม่ตรง (5 ค่า) <b>'+rep.mismatch+'</b> · ค่าชนกัน <b>'+rep.conflict+'</b>'+
     (rep.conflict?' <button type="button" id="ordForce">ทับด้วยค่าจาก XML</button>':'')+'</div>'+
-    (bad.length?'<div style="overflow:auto;max-height:260px"><table style="border-collapse:collapse;width:100%"><thead><tr><th align="left">สถานะ</th><th align="left">Onboard ID</th><th align="left">Orbit Download (XML)</th><th align="left">INVP Start → End (XML)</th><th align="left">รายละเอียด</th></tr></thead><tbody>'+
-      bad.slice(0,300).map(i=>'<tr><td>'+lab[i.status]+'</td><td>'+esc(i.o.id)+'</td><td>'+esc(i.o.orbit||"-")+'</td><td>'+esc(fmt(i.o.start)+" → "+fmt(i.o.end))+'</td><td>'+esc(i.note||"")+'</td></tr>').join("")+'</tbody></table></div>':'<div class="hint">ทุกแถวตรงกันและกรอกครบแล้ว</div>');
+    (bad.length?'<div style="overflow:auto;max-height:260px"><table style="border-collapse:collapse;width:100%"><thead><tr><th align="left">สถานะ</th><th align="left">Onboard ID</th><th align="left">INVP Start → End (XML)</th><th align="left">Acq Start (XML)</th><th align="left">Request Name (XML)</th><th align="left">รายละเอียด</th></tr></thead><tbody>'+
+      bad.slice(0,300).map(i=>'<tr><td>'+lab[i.status]+'</td><td>'+esc(i.o.id)+'</td><td>'+esc(fmt(i.o.start)+" → "+fmt(i.o.end))+'</td><td>'+esc(fmt(i.o.as))+'</td><td>'+esc(i.o.rq)+'</td><td>'+esc(i.note||"")+'</td></tr>').join("")+'</tbody></table></div>':'<div class="hint">ทุกแถวตรงกันและกรอกครบแล้ว</div>');
   const fb=document.getElementById("ordForce");if(fb)fb.onclick=()=>{applyOrders(true);refresh();toast("ทับด้วยค่าจาก XML แล้ว");};
 }
-function refresh(){rebuild();applyOrders();renderRangeOptions();ROWS=buildRows();chrome();fillFilters();render();}
+function refresh(){rebuild();buildKeyIndex();applyOrders();renderRangeOptions();ROWS=buildRows();chrome();fillFilters();render();}
 
 /* ============ export ============ */
 function dl(blob,name){const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;
@@ -3300,8 +3360,8 @@ function removePlan(key){
   const pl=PLANS.find(p=>p.key===key);
   PLANS=PLANS.filter(p=>p.key!==key);
   if(pl){Object.values(pl.emps).forEach(d=>{
-    d.passes.forEach(ps=>ps.rows.forEach(r=>{delete META.cuf[r.id];delete META.cloud[r.id];delete META.inc[r.id];delete META.area[r.id];delete META.remark[r.id];delete META.dstrip[r.id];}));
-    d.acq.forEach(r=>{delete META.cuf[r.id];delete META.cloud[r.id];delete META.inc[r.id];delete META.area[r.id];delete META.remark[r.id];delete META.dstrip[r.id];});});}
+    d.passes.forEach(ps=>ps.rows.forEach(r=>{const k=dwlDk(r,ps,pl);delete META.cuf[r.id];delete META.cloud[k];delete META.inc[k];delete META.area[k];delete META.remark[r.id];delete META.dstrip[r.id];}));
+    d.acq.forEach(r=>{const k=acqDk(r,pl);delete META.cuf[r.id];delete META.cloud[k];delete META.inc[k];delete META.area[k];delete META.remark[r.id];delete META.dstrip[r.id];});});}
   delete RAW[key];delete META.mp[key];saveMeta();
   saveStore();
   refresh();
@@ -3782,9 +3842,9 @@ function renderDash(){
     rows.forEach(r=>{
       const c=reqCategory(r.req)||"อื่น ๆ";
       cnt[c]=(cnt[c]||0)+1;
-      const a=parseFloat(META.area[r.id]);
+      const a=parseFloat(META.area[r.dk]);
       if(isFinite(a)){areaAll+=a;areaN++;areaSum[c]=(areaSum[c]||0)+a;areaFill[c]=(areaFill[c]||0)+1;}
-      const cc=parseFloat(META.cloud[r.id]);
+      const cc=parseFloat(META.cloud[r.dk]);
       if(isFinite(cc)){ccN++;ccSum+=cc;}
     });
     const cats=Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a]);
@@ -3808,7 +3868,7 @@ function renderDash(){
     /* ---- Cloud cover bands ---- */
     const bands=[["0–10",-1,10,"#12A874"],["10–20",10,20,"#2BC4A0"],["20–30",20,30,"#5B8DEF"],["30–40",30,40,"#1A63D6"],["40–50",40,50,"#F2A65A"],[">50",50,Infinity,"#F58220"]];
     const bc=bands.map(()=>0);
-    rows.forEach(r=>{const v=parseFloat(META.cloud[r.id]);if(!isFinite(v))return;for(let i=0;i<bands.length;i++){if(v>bands[i][1]&&v<=bands[i][2]){bc[i]++;break;}}});
+    rows.forEach(r=>{const v=parseFloat(META.cloud[r.dk]);if(!isFinite(v))return;for(let i=0;i<bands.length;i++){if(v>bands[i][1]&&v<=bands[i][2]){bc[i]++;break;}}});
     const mx=Math.max(1,...bc);
     $("#dashCloud").innerHTML=`<div class="cols">${bands.map((b,i)=>`<div class="col"><div class="val">${bc[i]}</div><div class="bar" style="--c:${b[3]};height:${bc[i]?Math.max(bc[i]/mx*100*0.82,3):0}%"></div></div>`).join("")}</div>
       <div class="collbl">${bands.map(b=>`<div>${b[0]} %</div>`).join("")}</div>
