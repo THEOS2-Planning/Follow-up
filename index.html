@@ -2665,14 +2665,14 @@ const mpKey=s=>String(s||"").trim().toUpperCase().split("_").slice(1,4).join("_"
 const tyN=s=>String(s||"").trim().toUpperCase();
 const dsKey=(id,req,mp,ty,s,e,a,ae)=>id?id+"-"+hash36([reqN(req),tyN(ty),T19(s),T19(e),T19(a),T19(ae)].join("|")):"";
 let PAIRED=new Set();   /* ชุดข้อมูลที่จับคู่กับ Planning Order ได้ในเครื่องนี้ */
-let KIX={acq:{},dl:{}};
+let KIX={acq:{},dl:{},acqById:{}};
 function buildKeyIndex(){
-  const acq={},dl={};
+  const acq={},dl={},acqById={};
   PLANS.forEach(pl=>Object.values(pl.emps).forEach(d=>{
-    d.acq.forEach(r=>{(acq[r.id+"|"+reqN(r.req)]=acq[r.id+"|"+reqN(r.req)]||[]).push({st:pl.stamp,b:r.b,e:r.e,ty:r.type});});
+    d.acq.forEach(r=>{(acq[r.id+"|"+reqN(r.req)]=acq[r.id+"|"+reqN(r.req)]||[]).push({st:pl.stamp,b:r.b,e:r.e,ty:r.type});(acqById[r.id]=acqById[r.id]||[]).push({st:pl.stamp,b:r.b,e:r.e,ty:r.type,req:r.req});});
     d.passes.forEach(ps=>ps.rows.forEach(r=>{(dl[r.id+"|"+reqN(r.req)]=dl[r.id+"|"+reqN(r.req)]||[]).push({st:pl.stamp,s:ps.start,e:ps.end,orbit:ps.orbit,mp:pl.key,ty:r.type});}));
   }));
-  KIX={acq,dl};
+  KIX={acq,dl,acqById};
 }
 function pickByStamp(arr,st,before){
   if(!arr||!arr.length)return null;
@@ -3249,23 +3249,31 @@ function importOrders(xml,fileName){
   try{localStorage.setItem(ORD_DONE_KEY,JSON.stringify(dn));}catch(e){}
   return fileName+" ("+rows.length+" แถว)";
 }
-/* แถว Downlink ของทุกแผนที่นำเข้า (รวมแผนที่ EMP ถูกแทนที่แล้ว) พร้อมค่า 7 อย่างของชุดข้อมูล */
+/* แถว Downlink ของทุกแผนที่นำเข้า (รวมแผนที่ EMP ถูกแทนที่แล้ว) · alts = ทุก Acquisition ของ ON_BOARD_ID นี้ในทุกแผนที่นำเข้า */
 function orderCands(){
   const out=[];
   PLANS.forEach(pl=>Object.keys(pl.emps).forEach(e=>pl.emps[e].passes.forEach(ps=>ps.rows.forEach(r=>{
     const a=pickAcq(r.id,r.req,pl.stamp);
-    out.push({id:r.id,req:r.req,mp:pl.key,ty:(a&&a.ty)||r.type,s:ps.start,e:ps.end,a:a?a.b:"",ae:a?a.e:"",dk:dwlDk(r,ps,pl)});}))));
+    out.push({id:r.id,req:r.req,mp:pl.key,ty:(a&&a.ty)||r.type,rty:r.type,s:ps.start,e:ps.end,a:a?a.b:"",ae:a?a.e:"",
+      alts:KIX.acqById[r.id]||[],dk:dwlDk(r,ps,pl)});}))));
   return out;
 }
-const ok8=(c,o)=>reqN(c.req)===reqN(o.rq)&&tyN(c.ty)===tyN(o.ty)&&
-  nearT(c.s,o.start)&&nearT(c.e,o.end)&&nearT(c.a,o.as)&&nearT(c.ae,o.ae);
+/* จับคู่เต็ม 7 ค่า: Request Name + Acq Type + Onboard ID + INVP Start/End + Acq Start/End (Acquisition ใดก็ได้ของ ID นี้ที่ตรง) */
+const strictOk=(c,o)=>reqN(c.req)===reqN(o.rq)&&nearT(c.s,o.start)&&nearT(c.e,o.end)&&
+  c.alts.some(a=>tyN(a.ty)===tyN(o.ty)&&nearT(a.b,o.as)&&nearT(a.e,o.ae));
+/* แบบผ่อนปรน (ผู้ใช้กดเปิดเอง): ไม่เช็ค Acq Start/End — เช็คเฉพาะ Request Name + Acq Type + Onboard ID + INVP Start/End */
+const baseOk=(c,o)=>reqN(c.req)===reqN(o.rq)&&nearT(c.s,o.start)&&nearT(c.e,o.end)&&
+  (tyN(c.rty)===tyN(o.ty)||c.alts.some(a=>tyN(a.ty)===tyN(o.ty)));
+const RELAX_KEY="theos2_orders_relax_v1";
+const relaxOn=()=>{try{return localStorage.getItem(RELAX_KEY)==="1";}catch(e){return false;}};
+const acqTxt=a=>(fmt(a.b)||"-")+" → "+(fmt(a.e)||"-")+" ("+(a.ty||"-")+")";
 function applyOrders(force){
   buildKeyIndex();
   PAIRED=new Set();
-  const list=ordLoad(),rep={items:[],filled:0,newFilled:0,pending:0,mismatch:0,conflict:0,total:list.length};
+  const list=ordLoad(),rep={items:[],filled:0,newFilled:0,pending:0,mismatch:0,conflict:0,relaxed:0,total:list.length};
   LAST_ORD=rep;
   if(!list.length){renderOrdBox(rep);return rep;}
-  const dn=ordDone(),byId={},planKeys=new Set(PLANS.map(p=>p.key));
+  const dn=ordDone(),byId={},planKeys=new Set(PLANS.map(p=>p.key)),relax=relaxOn();
   orderCands().forEach(c=>{(byId[c.id]=byId[c.id]||[]).push(c);});
   let changed=false;
   list.forEach(o=>{
@@ -3276,22 +3284,27 @@ function applyOrders(force){
       if(prev.some(k=>META.area[k]!==undefined||META.cloud[k]!==undefined||META.inc[k]!==undefined)){it.status="ok";rep.filled++;return;}
       it.status="pending";
       it.note=planMissing?"ยังไม่ได้นำเข้าไฟล์ INVP ของ "+o.plan:"ไม่พบ ON_BOARD_ID นี้ในตาราง";rep.pending++;return;}
-    /* ชุดข้อมูลเดียวกัน = Request Name + Acq Type + Onboard ID + INVP Start/End + Acq Start/End ตรงกันทั้งหมด (7 ค่า) */
-    const hit=cand.filter(c=>ok8(c,o));
+    let hit=cand.filter(c=>strictOk(c,o)),relaxed=false;
+    if(!hit.length&&relax){hit=cand.filter(c=>baseOk(c,o));relaxed=hit.length>0;}
+    const xml="XML: "+o.rq+" · INVP "+fmt(o.start)+" → "+fmt(o.end)+" · ACQ "+fmt(o.as)+" → "+fmt(o.ae)+" ("+(o.ty||"-")+")";
     if(!hit.length){
       const same=cand.filter(c=>reqN(c.req)===reqN(o.rq));
-      if(same.length&&same.every(c=>!c.a)){it.status="pending";
-        it.note="ยังไม่พบ Acquisition (ACQ_BEGIN/ACQ_END) ของ ID + Request Name นี้ในไฟล์ INVP ที่นำเข้า";rep.pending++;return;}
+      if(same.length&&same.every(c=>!c.alts.length)){it.status="pending";
+        it.note="ยังไม่พบ Acquisition ของ ON_BOARD_ID นี้ในไฟล์ INVP ที่นำเข้า (อาจอยู่ในไฟล์ INVP ที่ยังไม่ได้นำเข้า) · "+xml;rep.pending++;return;}
+      const altDiff=a=>{const b=[];
+        if(tyN(a.ty)!==tyN(o.ty))b.push("Acq Type");
+        if(!nearT(a.b,o.as))b.push("Acq Start");
+        if(!nearT(a.e,o.ae))b.push("Acq End");return b;};
       const diffOf=c=>{const b=[];
         if(reqN(c.req)!==reqN(o.rq))b.push("Request Name");
-        if(tyN(c.ty)!==tyN(o.ty))b.push("Acq Type");
         if(!nearT(c.s,o.start))b.push("INVP Start");
         if(!nearT(c.e,o.end))b.push("INVP End");
-        if(!nearT(c.a,o.as))b.push("Acq Start");
-        if(!nearT(c.ae,o.ae))b.push("Acq End");return b;};
+        if(!c.alts.length)b.push("Acq (ไม่มีข้อมูล)");
+        else b.push(...c.alts.map(altDiff).sort((x,y)=>x.length-y.length)[0]);
+        return b;};
       const best=cand.map(c=>({c,b:diffOf(c)})).sort((x,y)=>x.b.length-y.b.length)[0];
       it.status="mismatch";
-      it.note=best.b.join(" / ")+" ไม่ตรง · ตาราง: "+fmt(best.c.s)+" → "+fmt(best.c.e)+" · ACQ "+(fmt(best.c.a)||"-")+" → "+(fmt(best.c.ae)||"-")+" · "+best.c.req;
+      it.note=best.b.join(" / ")+" ไม่ตรง · "+xml+" ‖ ตาราง: "+best.c.req+" · INVP "+fmt(best.c.s)+" → "+fmt(best.c.e)+" · ACQ "+(best.c.alts.map(acqTxt).join(" | ")||"-");
       rep.mismatch++;return;}
     const dks=[...new Set(hit.map(c=>c.dk))];
     dks.forEach(dk=>PAIRED.add(dk));
@@ -3310,6 +3323,8 @@ function applyOrders(force){
     if(fresh)rep.newFilled++;
     dn[key]=done;
     if(diff.length){it.status="conflict";it.note="ค่าเดิมในตาราง: "+diff.join(", ")+" · Area ใช้ค่าจาก XML แล้ว";rep.conflict++;return;}
+    if(relaxed){it.status="relaxed";rep.relaxed++;rep.filled++;
+      it.note="จับคู่แบบผ่อนปรน (ไม่เช็ค Acq Start/End) · "+xml+" ‖ ตาราง: ACQ "+(hit[0].alts.map(acqTxt).join(" | ")||"ไม่มีข้อมูล Acquisition");return;}
     it.status="ok";rep.filled++;
   });
   if(changed)saveMeta();
@@ -3321,12 +3336,14 @@ const orderSummary=r=>"กรอก "+r.newFilled+" แถว (ตรงแล�
 function renderOrdBox(rep){
   const box=document.getElementById("ordbox"),el=document.getElementById("ordList");if(!box||!el)return;
   document.getElementById("cOrd").textContent=rep.filled+"/"+rep.total;
-  const bad=rep.items.filter(i=>i.status!=="ok"),lab={pending:"รอ INVP",mismatch:"ไม่ตรง (7 ค่า)",conflict:"ค่าชนกัน"};
+  const bad=rep.items.filter(i=>i.status!=="ok"),lab={pending:"รอ INVP",mismatch:"ไม่ตรง (7 ค่า)",conflict:"ค่าชนกัน",relaxed:"จับคู่แบบผ่อนปรน"};
   el.innerHTML=!rep.total?'<div class="hint">ยังไม่ได้นำเข้าไฟล์ Planning Orders</div>':
-    '<div style="margin:2px 0 8px">กรอกแล้ว <b>'+rep.filled+'</b> / '+rep.total+' · รอ INVP <b>'+rep.pending+'</b> · ไม่ตรง (7 ค่า) <b>'+rep.mismatch+'</b> · ค่าชนกัน <b>'+rep.conflict+'</b>'+
-    (rep.conflict?' <button type="button" id="ordForce">ทับด้วยค่าจาก XML</button>':'')+'</div>'+
+    '<div style="margin:2px 0 8px">กรอกแล้ว <b>'+rep.filled+'</b> / '+rep.total+' · รอ INVP <b>'+rep.pending+'</b> · ไม่ตรง (7 ค่า) <b>'+rep.mismatch+'</b> · ค่าชนกัน <b>'+rep.conflict+'</b>'+(rep.relaxed?' · ผ่อนปรน <b>'+rep.relaxed+'</b>':'')+
+    (rep.conflict?' <button type="button" id="ordForce">ทับด้วยค่าจาก XML</button>':'')+
+    (rep.mismatch||rep.pending||rep.relaxed||relaxOn()?' <button type="button" id="ordRelax" title="จับคู่โดยไม่เช็ค Acq Start/End (เช็คเฉพาะ Request Name + Acq Type + Onboard ID + INVP Start/End)">'+(relaxOn()?'ปิดจับคู่แบบผ่อนปรน':'เปิดจับคู่แบบผ่อนปรน (ไม่เช็ค Acq Start/End)')+'</button>':'')+'</div>'+
     (bad.length?'<div style="overflow:auto;max-height:260px"><table style="border-collapse:collapse;width:100%"><thead><tr><th align="left">สถานะ</th><th align="left">Onboard ID</th><th align="left">INVP Start → End (XML)</th><th align="left">Acq Start (XML)</th><th align="left">Request Name (XML)</th><th align="left">รายละเอียด</th></tr></thead><tbody>'+
       bad.slice(0,300).map(i=>'<tr><td>'+lab[i.status]+'</td><td>'+esc(i.o.id)+'</td><td>'+esc(fmt(i.o.start)+" → "+fmt(i.o.end))+'</td><td>'+esc(fmt(i.o.as))+'</td><td>'+esc(i.o.rq)+'</td><td>'+esc(i.note||"")+'</td></tr>').join("")+'</tbody></table></div>':'<div class="hint">ทุกแถวตรงกันและกรอกครบแล้ว</div>');
+  const rb=document.getElementById("ordRelax");if(rb)rb.onclick=()=>{try{localStorage.setItem(RELAX_KEY,relaxOn()?"0":"1");}catch(e){}applyOrders();refresh();toast(relaxOn()?"เปิดจับคู่แบบผ่อนปรนแล้ว":"ปิดจับคู่แบบผ่อนปรนแล้ว");};
   const fb=document.getElementById("ordForce");if(fb)fb.onclick=()=>{applyOrders(true);refresh();toast("ทับด้วยค่าจาก XML แล้ว");};
 }
 function refresh(){rebuild();buildKeyIndex();applyOrders();renderRangeOptions();ROWS=buildRows();chrome();fillFilters();render();}
