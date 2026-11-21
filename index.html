@@ -438,7 +438,7 @@ thead th.sortable:hover{background:#DDEFE6}
 </details>
 
 <details class="filesbox" id="ordbox">
-  <summary>ผลตรวจ Planning Orders <span class="cnt" id="cOrd">0/0</span><span class="hint" style="margin-left:8px">— จับคู่เมื่อ Mission Plan ID + Request Name + Acq Type + Onboard ID + INVP Start/End + Acq Start/End (XML) ตรงกับชุดข้อมูลในตารางทั้ง 8 ค่า</span></summary>
+  <summary>ผลตรวจ Planning Orders <span class="cnt" id="cOrd">0/0</span><span class="hint" style="margin-left:8px">— จับคู่เมื่อ Request Name + Acq Type + Onboard ID + INVP Start/End + Acq Start/End (XML) ตรงกับชุดข้อมูลในตารางทั้ง 7 ค่า</span></summary>
   <div id="ordList" style="padding:8px 12px;font-size:12px"></div>
 </details>
 
@@ -2663,7 +2663,7 @@ function hash36(s){let a=0x811c9dc5,b=0x9e3779b9;
   return (a>>>0).toString(36)+(b>>>0).toString(36);}
 const mpKey=s=>String(s||"").trim().toUpperCase().split("_").slice(1,4).join("_");   /* MPLN_T2V_<stamp>_<orbit>_<prod> -> T2V_<stamp>_<orbit> */
 const tyN=s=>String(s||"").trim().toUpperCase();
-const dsKey=(id,req,mp,ty,s,e,a,ae)=>id?id+"-"+hash36([mp,reqN(req),tyN(ty),T19(s),T19(e),T19(a),T19(ae)].join("|")):"";
+const dsKey=(id,req,mp,ty,s,e,a,ae)=>id?id+"-"+hash36([reqN(req),tyN(ty),T19(s),T19(e),T19(a),T19(ae)].join("|")):"";
 let PAIRED=new Set();   /* ชุดข้อมูลที่จับคู่กับ Planning Order ได้ในเครื่องนี้ */
 let KIX={acq:{},dl:{}};
 function buildKeyIndex(){
@@ -3192,7 +3192,7 @@ function render(){
 
 /* ============ Planning Orders (SpreadsheetML .xml) -> Area / Cloud Cover / Incidence Angle ============
    นำเข้าด้วยปุ่ม "เพิ่มไฟล์ XML" เดียวกับไฟล์ INVP (เลือกพร้อมกันหรือแยกครั้งก็ได้)
-   กรอกให้เฉพาะ "ชุดข้อมูลเดียวกัน" คือ Mission Plan ID + Request Name + Acq Type + Onboard ID + INVP Start + INVP End + Acq Start + Acq End ตรงกันทั้ง 8 ค่า
+   กรอกให้เฉพาะ "ชุดข้อมูลเดียวกัน" คือ Request Name + Acq Type + Onboard ID + INVP Start + INVP End + Acq Start + Acq End ตรงกันทั้ง 7 ค่า (ไม่ใช้ Mission Plan ID)
    ยังไม่มีคู่ -> Status CUF = Waiting เท่านั้น (ไม่มี Data Strip / Production / Completed)
    (เวลาต่างกันไม่เกิน 1 วินาทีถือว่าตรง · ค่าถูกเก็บตามชุดข้อมูล ไม่ใช่ตาม ON_BOARD_ID อย่างเดียว)
    - ยังไม่มี ON_BOARD_ID นี้ในตาราง -> รอ (เก็บไว้ในเครื่อง กรอกให้เองเมื่อนำเข้าไฟล์ INVP ภายหลัง)
@@ -3202,7 +3202,7 @@ function render(){
 const ORD_KEY="theos2_orders_v3", ORD_DONE_KEY="theos2_orders_done_v3";   /* v2: ต้องมี Acq Start + Request Name — นำเข้าไฟล์ Planning Orders ใหม่ */
 let LAST_ORD=null;
 const isOrderXml=t=>/<Workbook[\s>]/.test(t)&&!/<MISSION_PLAN_ID>/.test(t)&&(/Onboard ID/i.test(t)||/ss:Name="Planning Orders"/i.test(t)||/<Data[^>]*>\s*MPLN_/.test(t));
-const ordKey=o=>[mpKey(o.plan),o.id,reqN(o.rq),tyN(o.ty),T19(o.start),T19(o.end),T19(o.as),T19(o.ae)].join("|");
+const ordKey=o=>[o.id,reqN(o.rq),tyN(o.ty),T19(o.start),T19(o.end),T19(o.as),T19(o.ae)].join("|");
 const ordLoad=()=>{try{const a=JSON.parse(localStorage.getItem(ORD_KEY)||"[]");return Array.isArray(a)?a:[];}catch(e){return [];}};
 const ordDone=()=>{try{return JSON.parse(localStorage.getItem(ORD_DONE_KEY)||"{}")||{};}catch(e){return {};}};
 const cleanNum=v=>{const x=parseFloat(v);return isFinite(x)?String(+x.toPrecision(15)):"";};
@@ -3228,7 +3228,7 @@ function parseOrders(xml,fileName){
       as:col(s=>s==="acq start"),ae:col(s=>s==="acq end"),rq:col(s=>s==="request name"),ty:col(s=>s==="acq type"),
       mp:col(s=>s==="mission plan id")}
     :{id:3,st:4,en:5,orb:8,ar:9,cl:14,inc:15,mp:0,as:6,ae:7,rq:1,ty:2};
-  if([c.mp,c.rq,c.ty,c.id,c.st,c.en,c.as,c.ae].some(i=>i<0))throw new Error("ไฟล์ "+fileName+" ไม่มีคอลัมน์ Mission Plan ID / Request Name / Acq Type / Onboard ID / INVP Start / INVP End / Acq Start / Acq End");
+  if([c.rq,c.ty,c.id,c.st,c.en,c.as,c.ae].some(i=>i<0))throw new Error("ไฟล์ "+fileName+" ไม่มีคอลัมน์ Request Name / Acq Type / Onboard ID / INVP Start / INVP End / Acq Start / Acq End");
   const out=[];
   grid.slice(hasHeader?1:0).forEach(r=>{
     const id=(r[c.id]||"").trim();if(!/^\d+$/.test(id))return;
@@ -3249,7 +3249,7 @@ function importOrders(xml,fileName){
   try{localStorage.setItem(ORD_DONE_KEY,JSON.stringify(dn));}catch(e){}
   return fileName+" ("+rows.length+" แถว)";
 }
-/* แถว Downlink ของทุกแผนที่นำเข้า (รวมแผนที่ EMP ถูกแทนที่แล้ว) พร้อมค่า 8 อย่างของชุดข้อมูล */
+/* แถว Downlink ของทุกแผนที่นำเข้า (รวมแผนที่ EMP ถูกแทนที่แล้ว) พร้อมค่า 7 อย่างของชุดข้อมูล */
 function orderCands(){
   const out=[];
   PLANS.forEach(pl=>Object.keys(pl.emps).forEach(e=>pl.emps[e].passes.forEach(ps=>ps.rows.forEach(r=>{
@@ -3257,7 +3257,7 @@ function orderCands(){
     out.push({id:r.id,req:r.req,mp:pl.key,ty:(a&&a.ty)||r.type,s:ps.start,e:ps.end,a:a?a.b:"",ae:a?a.e:"",dk:dwlDk(r,ps,pl)});}))));
   return out;
 }
-const ok8=(c,o)=>c.mp===mpKey(o.plan)&&reqN(c.req)===reqN(o.rq)&&tyN(c.ty)===tyN(o.ty)&&
+const ok8=(c,o)=>reqN(c.req)===reqN(o.rq)&&tyN(c.ty)===tyN(o.ty)&&
   nearT(c.s,o.start)&&nearT(c.e,o.end)&&nearT(c.a,o.as)&&nearT(c.ae,o.ae);
 function applyOrders(force){
   buildKeyIndex();
@@ -3272,18 +3272,17 @@ function applyOrders(force){
     const key=ordKey(o),it={o,status:""};rep.items.push(it);
     const prev=Array.isArray(dn[key])?dn[key]:[];
     const pk=mpKey(o.plan),cand=byId[o.id],planMissing=!!pk&&!planKeys.has(pk);
-    if(!cand||planMissing){
+    if(!cand){
       if(prev.some(k=>META.area[k]!==undefined||META.cloud[k]!==undefined||META.inc[k]!==undefined)){it.status="ok";rep.filled++;return;}
       it.status="pending";
       it.note=planMissing?"ยังไม่ได้นำเข้าไฟล์ INVP ของ "+o.plan:"ไม่พบ ON_BOARD_ID นี้ในตาราง";rep.pending++;return;}
-    /* ชุดข้อมูลเดียวกัน = Mission Plan ID + Request Name + Acq Type + Onboard ID + INVP Start/End + Acq Start/End ตรงกันทั้งหมด */
+    /* ชุดข้อมูลเดียวกัน = Request Name + Acq Type + Onboard ID + INVP Start/End + Acq Start/End ตรงกันทั้งหมด (7 ค่า) */
     const hit=cand.filter(c=>ok8(c,o));
     if(!hit.length){
-      const same=cand.filter(c=>c.mp===pk&&reqN(c.req)===reqN(o.rq));
+      const same=cand.filter(c=>reqN(c.req)===reqN(o.rq));
       if(same.length&&same.every(c=>!c.a)){it.status="pending";
         it.note="ยังไม่พบ Acquisition (ACQ_BEGIN/ACQ_END) ของ ID + Request Name นี้ในไฟล์ INVP ที่นำเข้า";rep.pending++;return;}
       const diffOf=c=>{const b=[];
-        if(c.mp!==pk)b.push("Mission Plan ID");
         if(reqN(c.req)!==reqN(o.rq))b.push("Request Name");
         if(tyN(c.ty)!==tyN(o.ty))b.push("Acq Type");
         if(!nearT(c.s,o.start))b.push("INVP Start");
@@ -3292,7 +3291,7 @@ function applyOrders(force){
         if(!nearT(c.ae,o.ae))b.push("Acq End");return b;};
       const best=cand.map(c=>({c,b:diffOf(c)})).sort((x,y)=>x.b.length-y.b.length)[0];
       it.status="mismatch";
-      it.note=best.b.join(" / ")+" ไม่ตรง · ตาราง: "+best.c.mp+" · "+fmt(best.c.s)+" → "+fmt(best.c.e)+" · ACQ "+(fmt(best.c.a)||"-")+" → "+(fmt(best.c.ae)||"-")+" · "+best.c.req;
+      it.note=best.b.join(" / ")+" ไม่ตรง · ตาราง: "+fmt(best.c.s)+" → "+fmt(best.c.e)+" · ACQ "+(fmt(best.c.a)||"-")+" → "+(fmt(best.c.ae)||"-")+" · "+best.c.req;
       rep.mismatch++;return;}
     const dks=[...new Set(hit.map(c=>c.dk))];
     dks.forEach(dk=>PAIRED.add(dk));
@@ -3318,13 +3317,13 @@ function applyOrders(force){
   renderOrdBox(rep);
   return rep;
 }
-const orderSummary=r=>"กรอก "+r.newFilled+" แถว (ตรงแล้วรวม "+r.filled+"/"+r.total+") · รอไฟล์ INVP "+r.pending+" · ไม่ตรง (8 ค่า) "+r.mismatch+" · ค่าชนกัน "+r.conflict;
+const orderSummary=r=>"กรอก "+r.newFilled+" แถว (ตรงแล้วรวม "+r.filled+"/"+r.total+") · รอไฟล์ INVP "+r.pending+" · ไม่ตรง (7 ค่า) "+r.mismatch+" · ค่าชนกัน "+r.conflict;
 function renderOrdBox(rep){
   const box=document.getElementById("ordbox"),el=document.getElementById("ordList");if(!box||!el)return;
   document.getElementById("cOrd").textContent=rep.filled+"/"+rep.total;
-  const bad=rep.items.filter(i=>i.status!=="ok"),lab={pending:"รอ INVP",mismatch:"ไม่ตรง (8 ค่า)",conflict:"ค่าชนกัน"};
+  const bad=rep.items.filter(i=>i.status!=="ok"),lab={pending:"รอ INVP",mismatch:"ไม่ตรง (7 ค่า)",conflict:"ค่าชนกัน"};
   el.innerHTML=!rep.total?'<div class="hint">ยังไม่ได้นำเข้าไฟล์ Planning Orders</div>':
-    '<div style="margin:2px 0 8px">กรอกแล้ว <b>'+rep.filled+'</b> / '+rep.total+' · รอ INVP <b>'+rep.pending+'</b> · ไม่ตรง (8 ค่า) <b>'+rep.mismatch+'</b> · ค่าชนกัน <b>'+rep.conflict+'</b>'+
+    '<div style="margin:2px 0 8px">กรอกแล้ว <b>'+rep.filled+'</b> / '+rep.total+' · รอ INVP <b>'+rep.pending+'</b> · ไม่ตรง (7 ค่า) <b>'+rep.mismatch+'</b> · ค่าชนกัน <b>'+rep.conflict+'</b>'+
     (rep.conflict?' <button type="button" id="ordForce">ทับด้วยค่าจาก XML</button>':'')+'</div>'+
     (bad.length?'<div style="overflow:auto;max-height:260px"><table style="border-collapse:collapse;width:100%"><thead><tr><th align="left">สถานะ</th><th align="left">Onboard ID</th><th align="left">INVP Start → End (XML)</th><th align="left">Acq Start (XML)</th><th align="left">Request Name (XML)</th><th align="left">รายละเอียด</th></tr></thead><tbody>'+
       bad.slice(0,300).map(i=>'<tr><td>'+lab[i.status]+'</td><td>'+esc(i.o.id)+'</td><td>'+esc(fmt(i.o.start)+" → "+fmt(i.o.end))+'</td><td>'+esc(fmt(i.o.as))+'</td><td>'+esc(i.o.rq)+'</td><td>'+esc(i.note||"")+'</td></tr>').join("")+'</tbody></table></div>':'<div class="hint">ทุกแถวตรงกันและกรอกครบแล้ว</div>');
